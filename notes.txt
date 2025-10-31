@@ -1,0 +1,38 @@
+
+
+
+
+Steps:
+
+1. Use Insta360 Studio to stitch .insv to a mp4
+
+2. Use Exiftool to extract gps data from .insv to .gpx
+	command: "exiftool -p gpx.fmt -ee3 in.insv > out.gpx"
+	
+3. Use Ffmpeg to change the mp4 from 24fps to 6fps
+	command: "ffmpeg -i in.mp4 -vf "select='not(mod(n,4))'" -q:v 2 -r 6 out.mp4"
+	
+3a. Use exiftool to re add the 360 projection meta data
+	command: exiftool -overwrite_original -XMP-GSpherical:Spherical="true" -G -s -b -j -a -T in.mp4	
+	
+
+
+
+alt: generate frames from 24fps video
+ command: ffmpeg -i in.mp4 -vf "fps=6" -qscale:v 2 frames/frame_%06d.jpg
+ 
+ 
+ 
+add correct creation time:
+	command: exiftool "-DateTimeOriginal=2025:07:14 07:32:01" frames/frame_000001.jpg
+ 
+geotag image:
+	command: exiftool -overwrite_original -geotag=VID_20250714_080201_00_002.gpx '-Geotime<${SubSecDateTimeOriginal}-00:00' frames/frame_000001.jpg
+	
+add projection tag:
+	command: exiftool -overwrite_original -XMP-GPano:ProjectionType=equirectangular frames/
+
+
+check:
+	geopic-tag-reader read --image frames/frame_000001.jpg
+	panoramax_cli check-sequences frames/
