@@ -12,7 +12,7 @@ def extract_gps(insv_path, output_path):
     cmd = [
         "exiftool",
         "-api", "largefilesupport=1",
-        "-p","gpx.fmt",
+        "-p", Path(__file__).parent/"gpx.fmt",
         "-ee3",
         insv_path
     ]
@@ -221,6 +221,7 @@ def process_file(insv_path,yaw_rotation,fps):
     cleanup(output_path)
 
 def main():
+
     path_str = sys.argv[1]
     path = Path(path_str)
     yaw_rotation = sys.argv[2]
@@ -234,8 +235,11 @@ def main():
     print(f"fps:  {fps}")
 
     if path.is_file():
+        #single file mode
         process_file(path,yaw_rotation,2)
+
     else:
+        #multi file mode
         insta_files = sorted(glob.glob(os.path.join(path, "*.insv")))
         print(f"files found:")
         for i, file_path in enumerate(insta_files):
@@ -243,7 +247,7 @@ def main():
             
         for i, file_path in enumerate(insta_files):
             print("--------------------------------------------------------")
-            print(f"processing {i} -> {file_path}")
+            print(f"processing input file {i} -> {file_path}")
             process_file(file_path,yaw_rotation,fps)
 
     return 0
