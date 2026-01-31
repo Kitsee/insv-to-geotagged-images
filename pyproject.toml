@@ -1,0 +1,12 @@
+[project]
+name = "insv_to_geotagged"
+version = "0.1.0"
+dependencies = [
+]
+
+[build-system]
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+insv_to_geotagged = "insv_to_geotagged.main:main"

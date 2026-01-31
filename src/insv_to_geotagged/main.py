@@ -220,8 +220,9 @@ def process_file(insv_path,yaw_rotation,fps):
     
     cleanup(output_path)
 
-def main():
 
+def main():
+    
     path_str = sys.argv[1]
     path = Path(path_str)
     yaw_rotation = sys.argv[2]
@@ -251,5 +252,3 @@ def main():
             process_file(file_path,yaw_rotation,fps)
 
     return 0
-    
-sys.exit(main())
