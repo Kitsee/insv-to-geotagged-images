@@ -106,12 +106,12 @@ def get_frame_deltas(path):
 
 
 
-def set_time_stamps(mp4_path, output_path):
+def set_time_stamps(insv_path, output_path):
     print("Setting Time Stamps")
 
     frame_times_path = output_path / "frame_times.txt"
 
-    start_time_str = get_start_time(mp4_path)
+    start_time_str = get_start_time(insv_path)
     print("mp4 start time: " + start_time_str)
     start_time = datetime.datetime.fromisoformat(start_time_str.replace(":", "-", 2))
     time_zone_offset = start_time_str[-6:]
@@ -128,7 +128,7 @@ def set_time_stamps(mp4_path, output_path):
         delta_time = start_time + datetime.timedelta(seconds=frame_deltas[i])
         time_stamp_whole = delta_time.strftime("%Y:%m:%d %H:%M:%S")
         time_stamp_ms = int(round(delta_time.microsecond / 1000.0))
-        #print(f"  {i+1}/{len(frames)}  →  {time_stamp_whole}:{time_stamp_ms}")
+        print(f"  {i+1}/{len(frames)}  →  {time_stamp_whole}:{time_stamp_ms}")
 
         cmd = [
             "exiftool", 
@@ -210,7 +210,7 @@ def process_file(insv_path,yaw_rotation,fps):
         print("Error: Extracting Frames failed")
         return 3
     
-    if set_time_stamps(mp4_path,output_path) != 0:
+    if set_time_stamps(insv_path,output_path) != 0:
         print("Error: Failed setting time stamps")
         return 4
     
@@ -237,7 +237,7 @@ def main():
 
     if path.is_file():
         #single file mode
-        process_file(path,yaw_rotation,2)
+        process_file(path,yaw_rotation,fps)
 
     else:
         #multi file mode
