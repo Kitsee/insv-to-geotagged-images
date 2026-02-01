@@ -265,6 +265,14 @@ def write_metadata(extracted_frames:list, out_path: Path):
     ]
     result = subprocess.run(cmd, stdout=sys.stdout, stderr=sys.stderr)
 
+    #cleanup csv
+    csv_path.unlink()
+    
+    if result.returncode != 0:
+        return False
+    
+    return True
+
 
 def load_gpx(path : Path) -> gpxpy.mod_gpx.GPX:
     gpx_file = open(path, 'r')
@@ -315,6 +323,8 @@ def main(path,yaw,min_distance,out_path):
 
     extracted_frames = extract_frames(mp4_path,out_path,start_time,gpx,min_distance,yaw)
 
-    write_metadata(extracted_frames, out_path)
+    if not write_metadata(extracted_frames, out_path):
+        print("Error: Failed to write metadata to frames")
+        return 4
 
     return 0
