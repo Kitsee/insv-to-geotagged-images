@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 
-import sys, os, datetime, subprocess, glob, json
+import click
+import sys,subprocess
+import gpxpy
 from pathlib import Path
+from datetime import datetime, timedelta,timezone
+import av
+import exiftool
 
-def extract_gps(insv_path, output_path):
-    frame_name = Path(output_path).name
-    gps_path = Path(output_path) / f"{frame_name}.gpx"
+def extract_gps(insv_path : Path, gpx_path : Path) -> int:
+    if gpx_path.exists():
+        print("GPX file already exists, skipping extraction")
+        return 0
 
     print("Extracting GPX")
-    outfile = open(gps_path, "w", encoding="utf-8")
+
+    outfile = open(gpx_path, "w", encoding="utf-8")
     cmd = [
         "exiftool",
         "-api", "largefilesupport=1",
@@ -16,239 +23,381 @@ def extract_gps(insv_path, output_path):
         "-ee3",
         insv_path
     ]
+
     result = subprocess.run(cmd, stdout=outfile, stderr=sys.stderr)
     outfile.close()
     if result.returncode == 0:
         print("GPX extraction successful")
     
     return result.returncode
- 
- 
-def extract_frames(mp4_path, output_path, rotation, fps):
-    print(f"Extracting Frames at {fps} fps")
 
-    output_file_path = output_path / "output.txt"
-    frame_times_path = output_path / "frame_times.txt"
-    frame_name = output_path.name
-
-    #extract frames
-    outputFile = open(output_file_path, "w", encoding="utf-8")
-    cmd = [
-        "ffmpeg",
-        "-i", mp4_path,
-        "-vf",
-        f"v360=input=equirect:output=equirect:yaw={rotation},fps={fps},showinfo",
-        "-qscale:v", "2",
-        f"{output_path}/{frame_name}_%06d.jpg"
-    ]
-    result = subprocess.run(cmd, stdout=sys.stdout, stderr=outputFile)
-    outputFile.close()
-
-    if result.returncode != 0:
-        return result.returncode
-
-    #process frame times file
-
-    #grep to get lines with pts time
-    grep_proc = subprocess.Popen(
-        [
-            "grep", 
-            "pts_time", 
-            output_file_path
-        ],
-        stdout=subprocess.PIPE,
-        text=True
-    )
-
-    #filter for just the value
-    frame_times_file = open(frame_times_path, "w", encoding="utf-8")
-    subprocess.run(
-        ["sed", "-E", r"s/.*pts_time:([0-9.]+).*/\1/"],
-        stdin=grep_proc.stdout,
-        stdout=frame_times_file,
-        text=True,
-        check=True
-    )
-    frame_times_file.close()
-    return 0
-
-
-
-
-def get_start_time(path):
-    #get start time of mp4
-    cmd = [
-        "exiftool", 
-        "-api", "largefilesupport=1",
-        "-json", 
-        "-api", 
-        "QuickTimeUTC", 
-        "-CreateDate", 
-        "-MediaCreateDate", 
-        path
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    data = json.loads(result.stdout)[0]
-    return data.get("CreateDate") or data.get("MediaCreateDate")
-
-
-
-def get_frame_deltas(path):
-    deltas = []
-    frame_times_file = open(path, "r", encoding="utf-8")
-    for line in frame_times_file:
-        line = line.strip()
-        if not line:
-            continue
-        deltas.append(float(line))
-    frame_times_file.close()
-    return deltas
-
-
-
-def set_time_stamps(insv_path, output_path):
-    print("Setting Time Stamps")
-
-    frame_times_path = output_path / "frame_times.txt"
-
-    start_time_str = get_start_time(insv_path)
-    print("mp4 start time: " + start_time_str)
-    start_time = datetime.datetime.fromisoformat(start_time_str.replace(":", "-", 2))
-    time_zone_offset = start_time_str[-6:]
-
-    frame_deltas = get_frame_deltas(frame_times_path)
-
-    frames = sorted(glob.glob(os.path.join(output_path, "*.jpg")))
-
-    if len(frame_deltas) != len(frames):
-        print("error length of frame times files doesnt match number of frames")
-        return -1
-    
-    for i, frame_path in enumerate(frames):
-        delta_time = start_time + datetime.timedelta(seconds=frame_deltas[i])
-        time_stamp_whole = delta_time.strftime("%Y:%m:%d %H:%M:%S")
-        time_stamp_ms = int(round(delta_time.microsecond / 1000.0))
-        print(f"  {i+1}/{len(frames)}  →  {time_stamp_whole}:{time_stamp_ms}")
-
-        cmd = [
-            "exiftool", 
-            "-overwrite_original",
-            "-XMP-GPano:ProjectionType=equirectangular",
-            "-Make=Insta360",
-            "-Model=X4",
-            "-FocalLength=1.2",
-            f"-AllDates={time_stamp_whole}",
-            f"-SubSecTimeOriginal={time_stamp_ms:03d}",
-            f"-SubSecTimeDigitized={time_stamp_ms:03d}",
-            f"-OffsetTime={time_zone_offset}",
-            f"-OffsetTimeOriginal={time_zone_offset}",
-            f"-OffsetTimeDigitized={time_zone_offset}",
-            frame_path
-        ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    
-    return 0
-
-
-def geotag_frames(output_path):
-    print("Geotagging Frames")
-    frame_name = Path(output_path).name
-    gps_path = Path(output_path) / f"{frame_name}.gpx"
-
+def get_start_time(insv_path : Path) -> datetime:
     cmd = [
         "exiftool",
-        "-overwrite_original",
-        f"-geotag={gps_path}",
-        "-Geotime<${SubSecDateTimeOriginal}-00:00",
-        f"{output_path}/"
+        "-api", "largefilesupport=1",
+        "-s", "-s", "-s",
+        "-CreateDate",
+        "-MediaCreateDate",
+        "-TrackCreateDate",
+        "-DateTimeOriginal",
+        insv_path
     ]
-    return subprocess.run(cmd, stdout=sys.stdout, stderr=sys.stderr).returncode
 
-def cleanup(output_path):
-    Path(output_path / "output.txt").unlink()
-    Path(output_path / "frame_times.txt").unlink()
-
-
-def process_file(insv_path,yaw_rotation,fps):
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    ts = result.stdout.strip()
+    if not ts:
+        return None
     
-    insv_path = Path(insv_path)
+    start_time = datetime.strptime(ts.partition('\n')[0], "%Y:%m:%d %H:%M:%S") # EXIF format: YYYY:MM:DD HH:MM:SS
+    if start_time.tzinfo is None:
+        print("Warning: start time has no time zone, assuming UTC.")
+        start_time = start_time.replace(tzinfo=timezone.utc)
+    return start_time
 
-    mp4_only_mode=False
+# def get_duration(insv_path : Path) -> timedelta:
+#     cmd = [
+#             "ffprobe", "-v", "error",
+#             "-select_streams", "v:0",
+#             "-show_entries", "stream=duration",
+#             "-of", "csv=p=0",
+#             insv_path
+#         ]
+#     out = subprocess.check_output(cmd, text=True).strip()
+#     return timedelta(seconds=float(out)) if out else None
 
-    #check insv exists
-    if insv_path.suffix != '.insv':
-        if insv_path.suffix == 'mp4':
-            mp4_only_mode = True
-        else:
-            print("Error: input is not a .insv file")
-            return 1
-    
-    if insv_path.exists() == False and mp4_only_mode == False:
-        print(f"Error: insv file  does not exist ({insv_path})")
-        return 1
-    
-    #check mp4 exists
-    mp4_path = insv_path.with_suffix(".mp4")
-    if mp4_path.exists() == False:
-        print(f"Error: mp4 with matching name missing ({mp4_path})")
-        return 1
-    
-   
-    if mp4_only_mode == False:
-        #create output directory
-        output_path = insv_path.with_suffix("")
-        if output_path.exists() == True:
-            print(f"Error: output directory already exists ({output_path})")
-            return 1
-        output_path.mkdir(parents=True)
+# def get_frames_and_pts(path):
+#     cmd = [
+#         "ffprobe",
+#         "-v", "error",
+#         "-select_streams", "v:0",
+#         "-show_packets",
+#         "-show_entries", "packet=pts_time",
+#         "-of", "csv=p=0",
+#         path
+#     ]
 
-        if extract_gps(insv_path,output_path) != 0:
-            print("Error: Extracting GPS failed")
-            return 2
+#     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+#     for frame_number, line in enumerate(proc.stdout):
+#         ts = line.strip()
+#         if ts:
+#             yield frame_number, timedelta(seconds=float(ts))
+
+#     proc.wait()
+
+
+
+# def lerp_points(point_a : gpxpy.mod_gpx.GPXTrackPoint, point_b : gpxpy.mod_gpx.GPXTrackPoint, time:datetime) -> gpxpy.mod_gpx.GPXTrackPoint:
+#     time_a = point_a.time
+#     time_b = point_b.time
+#     diff = time_b - time_a
+#     delta = time - time_a
+#     f = delta / diff
+
+#     return gpxpy.mod_gpx.GPXTrackPoint(
+
+#         time=time
+#     )
+
+#     print(f"a:{time_a}    b:{time_b}     t:{time}     f:{f}")
+#     return point_a
+#                     # TODO: If between two points -- approx position!
+#                     # return mod_geo.Location(point.latitude, point.longitude)
+
+def get_est_position_at_time(gpx: gpxpy.mod_gpx.GPX, time:datetime):
+    points = []
+    for track in gpx.tracks: 
+        for segments in track.segments:
+
+            first_time = segments.points[0].time
+            last_time = segments.points[-1].time
+
+            if first_time and time and last_time and not first_time <= time <= last_time:
+                break
+
+            for point in segments.points:
+                if point.time and point.time >= time:
+                    points.append(point)
+                    break
+    return points
+
+def is_any_point_closer(points:list[gpxpy.mod_gpx.GPXTrackPoint], target:gpxpy.mod_gpx.GPXTrackPoint, distance:float) -> bool:
+    for point in points:
+        if point.distance_2d(target) < distance:
+            return True
+    return False
+
+
+# def gen_desired_frame_indexes(insv_path: Path, start_time: datetime, gpx:gpxpy.mod_gpx.GPX, min_distance:float):
+#     selected_points = []
+#     selected_frames = []
+
+#     discarded_frames_count = 0
+
+#     for frame, pts in get_frames_and_pts(insv_path):
+#         frame_time = start_time + pts
+
+#         found_points = get_est_position_at_time(gpx, frame_time)
+#         if len(found_points) > 0:
+#             pos = found_points[0]
+
+#             if is_any_point_closer(selected_points,pos,min_distance):
+#                 discarded_frames_count +=1
+#             else:
+#                 selected_points.append(pos)
+#                 selected_frames.append({
+#                     "frame": frame,
+#                     "frame_time": frame_time,
+#                     "position": pos,
+#                 })
+    
+#     return selected_frames,discarded_frames_count
+
+
+
+def v360_yaw_filter_graph(width: int, height: int, pix_fmt: str, time_base, rotation_deg: float):
+    """
+    Build: buffer -> v360 -> buffersink
+    v360 args: input=equirect:output=equirect:yaw=<rotation>
+    """
+    graph = av.filter.Graph()
+
+    # Source (frames coming from decoder)
+    src = graph.add(
+        "buffer",
+        args=(
+            f"video_size={width}x{height}:"
+            f"pix_fmt={pix_fmt}:"
+            f"time_base={time_base.numerator}/{time_base.denominator}:"
+            f"pixel_aspect=1/1"
+        ),
+    )
+
+    # 360 Filter
+    v360 = graph.add("v360",args=f"input=equirect:output=equirect:yaw={rotation_deg}",)
+
+    # Sink (frames coming out of filter chain)
+    sink = graph.add("buffersink")
+
+    # Wire it up and configure
+    src.link_to(v360)
+    v360.link_to(sink)
+    graph.configure()
+
+    return graph, src, sink
+
+
+def extract_frames(path:Path,out_path:Path, start_time:datetime, gpx:gpxpy.mod_gpx.GPX, min_distance:float, yaw:float):
+    extracted_points = []
+    extracted_frames = []
+    
+    av.logging.set_level(av.logging.ERROR)
+
+    # Input stream
+    container = av.open(path)
+    input_stream = container.streams.video[0]
+
+    # Enable multithreaded decoding
+    cc = input_stream.codec_context
+    cc.thread_type = "AUTO"   # or "FRAME" / "SLICE" depending on codec
+    cc.thread_count = 0       # 0 = FFmpeg chooses (often == CPU cores)
+
+    # # Output stream
+    # out = av.open(out_path / "frames_%06d.jpg", mode="w", format="image2")
+    # output_stream = out.add_stream("png")           # FFmpeg's JPEG encoder
+    # output_stream.width = input_stream.width
+    # output_stream.height = input_stream.height
+    # output_stream.pix_fmt = "rgb24"                # common JPEG pix fmt
+    # output_stream.options = {"compression_level": "8"}              # lower = better quality (2–5 typical)
+
+    # # Enable multithreaded encoding
+    # cc = output_stream.codec_context
+    # cc.thread_type = "AUTO"   # or "FRAME" / "SLICE" depending on codec
+    # cc.thread_count = 0       # 0 = FFmpeg chooses (often == CPU cores)
+
+    filter_graph = None
+    src = None
+    sink = None
+
+    process_start_time = datetime.now()
+
+    print("")
+
+    for index, frame in enumerate(container.decode(input_stream)):
+        frame_time = start_time + timedelta(seconds=frame.time)
+        found_points = get_est_position_at_time(gpx, frame_time)
         
-    if extract_frames(mp4_path,output_path,yaw_rotation,fps) != 0:
-        print("Error: Extracting Frames failed")
+        if len(found_points) > 0:
+            if len(found_points) > 1:
+                print (f"Warning: multiple gps positions were found for frame time {frame_time}, only first will be used")
+            position = found_points[0]
+        
+            if not is_any_point_closer(extracted_points,position,min_distance):
+                #extract frame
+
+                if filter_graph == None:
+                    filter_graph, src, sink = v360_yaw_filter_graph(
+                            width=frame.width,
+                            height=frame.height,
+                            pix_fmt=frame.format.name,   
+                            time_base=frame.time_base,
+                            rotation_deg=yaw,
+                        )
+
+                src.push(frame)            
+                filtered_frame = sink.pull()
+                #for pkt in output_stream.encode(filtered_frame):
+                #    out.mux(pkt)
+
+                file_name = out_path / f"frames_{len(extracted_frames):0>5}.jpg"
+                filtered_frame.to_image().save(file_name, quality=90, optimize=False)
+
+                extracted_points.append(position)
+                extracted_frames.append({
+                    "frame_index": index,
+                    "file_path": file_name,
+                    "frame_time": frame_time,
+                    "position": position,
+                })
+                    
+        elapsed_time = datetime.now() - process_start_time
+        print("extracting frames:: frame number: {}, extracted: {}, discarded: {}, effective fps: {:2f}, speed ratio: {:2f}".format(
+            index,
+            len(extracted_frames),
+            index - len(extracted_frames),
+            (len(extracted_frames) / frame.time) if frame.time > 0 else 0,
+            frame.time / float(elapsed_time.seconds)
+        ),end="\r")
+
+    # flush output stream
+    # for pkt in output_stream.encode():
+    #     out.mux(pkt)
+    # out.close()
+
+    print("")
+    print(f"frame extraction complete frames: {len(extracted_frames)} discarded: {index - len(extracted_frames)}")
+    return extracted_frames
+
+def offset_to_str(dt):
+    off = dt.utcoffset()
+    if off is None:
+        return None
+
+    total_seconds = int(off.total_seconds())
+    sign = "+" if total_seconds >= 0 else "-"
+    total_seconds = abs(total_seconds)
+
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+
+    return f"{sign}{hours:02d}:{minutes:02d}"
+
+def write_metadata(extracted_frames:list, out_path: Path):
+    print("writing metadata csv")
+    csv_path = out_path/"metadata.csv"
+    csv_file = open(csv_path,"w")
+    csv_file.write(
+        "SourceFile,"
+        "AllDates,"
+        "SubSecTimeOriginal,"
+        "SubSecTimeDigitized,"
+        "OffsetTime,"
+        "OffsetTimeOriginal,"
+        "OffsetTimeDigitized,"
+        "GPSLatitude,"
+        "GPSLongitude,"
+        "-XMP-GPano:ProjectionType,"
+        "Make,"
+        "Model,"
+        "FocalLength"
+        "\n")
+
+    for extracted_frame in extracted_frames:
+        time_stamp_whole = extracted_frame["frame_time"].strftime("%Y:%m:%d %H:%M:%S")
+        time_stamp_ms = int(round(extracted_frame["frame_time"].microsecond / 1000.0))
+        time_zone_offset = offset_to_str(extracted_frame["frame_time"])
+        csv_file.write(
+            f"{extracted_frame["file_path"]},"
+            f"{time_stamp_whole},"
+            f"{time_stamp_ms:03d},"
+            f"{time_stamp_ms:03d},"
+            f"{time_zone_offset},"
+            f"{time_zone_offset},"
+            f"{time_zone_offset},"
+            f"{extracted_frame["position"].latitude},"
+            f"{extracted_frame["position"].longitude},"
+            "equirectangular,"
+            "Insta360,"
+            "X4,"
+            "1.2"
+            "\n"
+        )
+
+    csv_file.close()
+    print("csv written")
+
+    print("applying metadata")    
+    cmd = [
+        "exiftool",
+        "-api", "largefilesupport=1",
+        "-overwrite_original",
+        f"-csv={csv_path}",
+        out_path
+    ]
+    result = subprocess.run(cmd, stdout=sys.stdout, stderr=sys.stderr)
+
+
+
+@click.command()
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--yaw",default=0, help="the Yaw adjustment to be applied to the video")
+@click.option("--min_distance",default=5, help="minimum distance between frames in meters")
+@click.option("--out_path",default="", help="output path")
+def main(path,yaw,min_distance,out_path):
+
+    path        = Path(path)
+    mp4_path    = path.with_suffix(".mp4")
+    out_path    = path.with_suffix("") if out_path == "" else Path(out_path)
+    gpx_path    = out_path / f"{out_path.name}.gpx"
+
+    #create output directory
+    if out_path.exists() == True:
+        print(f"Warning: output directory already exists ({out_path})")
+    out_path.mkdir(parents=True,exist_ok=True)
+
+    #extract gpx
+    if extract_gps(path,gpx_path) != 0:
+        print("Error: Extracting GPS failed")
+        return 2
+
+    #load gpx file
+    gpx_file = open(gpx_path, 'r')
+    gpx = gpxpy.parse(gpx_file)
+
+    #get start time
+    start_time = get_start_time(path)
+    if start_time == None:
+        print("Error: Failed to extract start time from input file")
         return 3
-    
-    if set_time_stamps(insv_path,output_path) != 0:
-        print("Error: Failed setting time stamps")
-        return 4
-    
-    if geotag_frames(output_path) != 0:
-        print("Error: geotagging frames")
-        return 5
-    
-    cleanup(output_path)
+    print(f"Start time: {start_time}")
 
+    extracted_frames = extract_frames(mp4_path,out_path,start_time,gpx,min_distance,yaw)
 
-def main():
-    
-    path_str = sys.argv[1]
-    path = Path(path_str)
-    yaw_rotation = sys.argv[2]
+    write_metadata(extracted_frames, out_path)
+    # #get duration
+    # duration = get_duration(path)
+    # if duration == None:
+    #     print("Error: Failed to extract duration from input file")
+    #     return 4
+    # print(f"Duration: {duration}")
 
-    fps = 1
-    if len(sys.argv) >= 4:
-        fps = sys.argv[3]
+    # #end time
+    # end_time = start_time + duration
+    # print(f"End Time: {end_time}")
 
-    print(f"path: {path}")
-    print(f"yaw:  {yaw_rotation}")
-    print(f"fps:  {fps}")
+    # desired_frames,discarded_count = gen_desired_frame_indexes(path,start_time,gpx,min_distance)
 
-    if path.is_file():
-        #single file mode
-        process_file(path,yaw_rotation,fps)
+    # print(f"Desired: {len(desired_frames)}, discarded: {discarded_count}")
 
-    else:
-        #multi file mode
-        insta_files = sorted(glob.glob(os.path.join(path, "*.insv")))
-        print(f"files found:")
-        for i, file_path in enumerate(insta_files):
-            print(f" - {i} -> {file_path}")
-            
-        for i, file_path in enumerate(insta_files):
-            print("--------------------------------------------------------")
-            print(f"processing input file {i} -> {file_path}")
-            process_file(file_path,yaw_rotation,fps)
-
+   
     return 0
