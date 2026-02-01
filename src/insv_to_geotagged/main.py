@@ -32,6 +32,22 @@ def extract_gps(insv_path : Path, gpx_path : Path) -> int:
     return result.returncode
 
 
+def get_gps_start_time(insv_path : Path) -> datetime:
+    cmd = [
+        "exiftool",
+        "-api", "largefilesupport=1",
+        "-ee",
+        "-p", "'$GPSDateTime'",
+        insv_path
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    output = result.stdout.strip()
+
+    lines = [l for l in output.splitlines() if l.strip()]
+    if lines:
+        return datetime.fromisoformat(lines[0][1:-1].replace("Z", "+00:00").replace(":", "-", 2))
+
 def get_start_time(insv_path : Path) -> datetime:
     cmd = [
         "exiftool",
@@ -49,10 +65,19 @@ def get_start_time(insv_path : Path) -> datetime:
     if not ts:
         return None
     
+    assumed_utc = False
     start_time = datetime.strptime(ts.partition('\n')[0], "%Y:%m:%d %H:%M:%S") # EXIF format: YYYY:MM:DD HH:MM:SS
     if start_time.tzinfo is None:
-        print("Warning: start time has no time zone, assuming UTC.")
+        assumed_utc = True
         start_time = start_time.replace(tzinfo=timezone.utc)
+
+    gps_start_time = get_gps_start_time(insv_path)
+    if (gps_start_time - start_time).total_seconds() < 1.0:
+        start_time = gps_start_time
+        print ("GPS start time is within 1 second of video start time. using GPS start time as it normally has better accuracy")
+    elif assumed_utc:
+        print("Warning: start time has no time zone, assuming UTC.")
+
     return start_time
 
 
@@ -208,7 +233,7 @@ def extract_frames(path:Path,out_path:Path, start_time:datetime, gpx:gpxpy.mod_g
             len(extracted_frames),
             index - len(extracted_frames),
             ((len(extracted_frames) / frame.time) +1) if frame.time > 0 else 0,
-            frame.time / float(elapsed_time.seconds),
+            frame.time / float(elapsed_time.seconds) if elapsed_time.seconds > 0 else 0.0,
             speed * 2.237
         ),end="\r")
 
@@ -285,9 +310,6 @@ def write_metadata(extracted_frames:list, out_path: Path):
             "\n"
         )
 
-        print(extracted_frame["position"])
-        print(extracted_frame["position"].longitude)
-
     csv_file.close()
     print("csv written")
 
@@ -362,6 +384,9 @@ def main(path,out_path,yaw,min_distance,adaptive_distance):
     if start_time == None:
         print("Error: Failed to extract start time from input file")
         return 3
+    
+    start_time += timedelta(seconds=-1) # why is it 1sec off
+
     print(f"Start time: {start_time}")
 
     extracted_frames = extract_frames(mp4_path,out_path,start_time,gpx,min_distance,yaw)
