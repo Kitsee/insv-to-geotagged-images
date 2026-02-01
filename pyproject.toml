@@ -2,9 +2,10 @@
 name = "insv_to_geotagged"
 version = "0.1.0"
 dependencies = [
-    "pillow"
-    "av"
-    "gpxpy"
+    "pillow",
+    "av",
+    "gpxpy",
+    "click"
 ]
 
 [build-system]
