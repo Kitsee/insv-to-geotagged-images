@@ -73,11 +73,6 @@ def get_est_position_at_time(gpx: gpxpy.mod_gpx.GPX, time:datetime) -> list[gpxp
                     break
     return points
 
-def is_any_point_closer(points:list[gpxpy.mod_gpx.GPXTrackPoint], target:gpxpy.mod_gpx.GPXTrackPoint, distance:float) -> bool:
-    for point in points:
-        if point.distance_2d(target) < distance:
-            return True
-    return False
 
 
 def v360_yaw_filter_graph(width: int, height: int, pix_fmt: str, time_base, rotation_deg: float):
@@ -112,7 +107,33 @@ def v360_yaw_filter_graph(width: int, height: int, pix_fmt: str, time_base, rota
     return graph, src, sink
 
 
-def extract_frames(path:Path,out_path:Path, start_time:datetime, gpx:gpxpy.mod_gpx.GPX, min_distance:float, yaw:float):
+def should_extract_frame(points:list[gpxpy.mod_gpx.GPXTrackPoint], target:gpxpy.mod_gpx.GPXTrackPoint, speed_arg, distance) -> bool:
+
+    #convert to mph
+    speed = speed_arg * 2.237
+
+    min_distance = None
+    if distance is float:
+        #min mode
+        min_distance = distance
+    else:
+        #adaptive mode
+        min_dist,min_speed,max_dist,max_speed = distance
+
+        t = (speed - min_speed) / (max_speed - min_speed)
+        t = min(t, 1)
+        t = max(t, 0)
+        min_distance = min_dist + t * (max_dist - min_dist)
+    
+    #go backwards as the points at the end of the list are far more likely to be close to the current point
+    for point in reversed(points):
+        if point.distance_2d(target) < min_distance:
+            return False
+    return True
+
+
+
+def extract_frames(path:Path,out_path:Path, start_time:datetime, gpx:gpxpy.mod_gpx.GPX, min_distance, yaw:float):
     extracted_points = []
     extracted_frames = []
     
@@ -133,18 +154,27 @@ def extract_frames(path:Path,out_path:Path, start_time:datetime, gpx:gpxpy.mod_g
 
     process_start_time = datetime.now()
 
-    print("")
-
     for index, frame in enumerate(container.decode(input_stream)):
         frame_time = start_time + timedelta(seconds=frame.time)
         found_points = get_est_position_at_time(gpx, frame_time)
-        
+        speed = 0.0
+
         if len(found_points) > 0:
             if len(found_points) > 1:
                 print (f"Warning: multiple gps positions were found for frame time {frame_time}, only first will be used")
+
             position = found_points[0]
 
-            if not is_any_point_closer(extracted_points,position,min_distance):
+            #caculate speed
+            speed = 0.0
+            time_offset = timedelta(seconds=-1)
+            speed_points = get_est_position_at_time(gpx, frame_time + time_offset)
+            if len(speed_points) > 0:
+                speed = position.speed_between(speed_points[0])
+                if speed == None: speed = 0.0
+
+
+            if should_extract_frame(extracted_points,position,speed,min_distance):
                 #extract frame
 
                 if filter_graph == None:
@@ -159,8 +189,8 @@ def extract_frames(path:Path,out_path:Path, start_time:datetime, gpx:gpxpy.mod_g
                 src.push(frame)            
                 filtered_frame = sink.pull()
 
-                file_name = out_path / f"frames_{len(extracted_frames):0>5}.jpg"
-                filtered_frame.to_image().save(file_name, quality=90, optimize=False)
+                file_name = out_path / f"{out_path.name}_{len(extracted_frames):0>6}.jpg"
+                filtered_frame.to_image().save(file_name, quality=90, optimize=True)
 
                 extracted_points.append(position)
                 extracted_frames.append({
@@ -169,14 +199,17 @@ def extract_frames(path:Path,out_path:Path, start_time:datetime, gpx:gpxpy.mod_g
                     "frame_time": frame_time,
                     "position": position,
                 })
+
+            last_frame_position = position
                     
         elapsed_time = datetime.now() - process_start_time
-        print("extracting frames:: frame number: {}, extracted: {}, discarded: {}, effective fps: {:2f}, speed ratio: {:2f}".format(
-            index,
+        print("extracting frames:: frame number: {}, extracted: {}, discarded: {}, effective fps: {:.2f}, speed ratio: {:.2f}, cal speed {:.2f} mph".format(
+            index+1,
             len(extracted_frames),
             index - len(extracted_frames),
-            (len(extracted_frames) / frame.time) if frame.time > 0 else 0,
-            frame.time / float(elapsed_time.seconds)
+            ((len(extracted_frames) / frame.time) +1) if frame.time > 0 else 0,
+            frame.time / float(elapsed_time.seconds),
+            speed * 2.237
         ),end="\r")
 
     print("")
@@ -240,9 +273,9 @@ def write_metadata(extracted_frames:list, out_path: Path):
             f"{time_zone_offset},"
             #gps
             f"{extracted_frame["position"].latitude},"
-            f"{extracted_frame["position"].longitude},"
+            f"{abs(extracted_frame["position"].longitude)},"
             "N,"
-            "E,"
+            f"{"E" if extracted_frame["position"].longitude >= 0 else "W"},"
             f"{extracted_frame["position"].course},"
             #constants
             "equirectangular,"
@@ -251,6 +284,9 @@ def write_metadata(extracted_frames:list, out_path: Path):
             "1.2"
             "\n"
         )
+
+        print(extracted_frame["position"])
+        print(extracted_frame["position"].longitude)
 
     csv_file.close()
     print("csv written")
@@ -267,7 +303,7 @@ def write_metadata(extracted_frames:list, out_path: Path):
 
     #cleanup csv
     csv_path.unlink()
-    
+
     if result.returncode != 0:
         return False
     
@@ -291,10 +327,17 @@ def load_gpx(path : Path) -> gpxpy.mod_gpx.GPX:
 
 @click.command()
 @click.argument("path", type=click.Path(exists=True))
+@click.option("--out_path",default="", help="output path")
 @click.option("--yaw",default=0, help="the Yaw adjustment to be applied to the video")
 @click.option("--min_distance",default=5, help="minimum distance between frames in meters")
-@click.option("--out_path",default="", help="output path")
-def main(path,yaw,min_distance,out_path):
+@click.option("--adaptive_distance",nargs=4, type=float, help="varys min_distance based on speed, takes 4 vales min_dis @ min_speed, min_ids @ max_speed")
+def main(path,out_path,yaw,min_distance,adaptive_distance):
+
+    if adaptive_distance != None:
+        a,b,c,d = adaptive_distance
+        print(f"adaptive distance, {a}m @ {b}mph scaling up to {c}m @ {d}mph ")
+        min_distance = adaptive_distance
+
 
     path        = Path(path)
     mp4_path    = path.with_suffix(".mp4")
