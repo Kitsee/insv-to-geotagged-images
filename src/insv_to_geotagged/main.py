@@ -277,7 +277,7 @@ def write_metadata(extracted_frames:list, out_path: Path):
         "GPSLongitudeRef,"
         "GPSImgDirection,"
         #constants
-        "-XMP-GPano:ProjectionType,"
+        "XMP-GPano:ProjectionType,"
         "Make,"
         "Model,"
         "FocalLength"
