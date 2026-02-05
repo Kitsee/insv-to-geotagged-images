@@ -138,7 +138,7 @@ def should_extract_frame(points:list[gpxpy.mod_gpx.GPXTrackPoint], target:gpxpy.
     speed = speed_arg * 2.237
 
     min_distance = None
-    if distance is float:
+    if isinstance(distance, float):
         #min mode
         min_distance = distance
     else:
@@ -228,7 +228,7 @@ def extract_frames(path:Path,out_path:Path, start_time:datetime, gpx:gpxpy.mod_g
             last_frame_position = position
                     
         elapsed_time = datetime.now() - process_start_time
-        print("extracting frames:: frame number: {}, extracted: {}, discarded: {}, effective fps: {:.2f}, speed ratio: {:.2f}, cal speed {:.2f} mph".format(
+        print("frame: {}, extracted: {}, discarded: {}, eff fps: {:.2f}, process speed: {:.2f}, gnd speed {:.2f} mph        ".format(
             index+1,
             len(extracted_frames),
             index - len(extracted_frames),
@@ -354,6 +354,7 @@ def load_gpx(path : Path) -> gpxpy.mod_gpx.GPX:
 @click.option("--min_distance",default=5, help="minimum distance between frames in meters")
 @click.option("--adaptive_distance",nargs=4, type=float, help="varys min_distance based on speed, takes 4 vales min_dis @ min_speed, min_ids @ max_speed")
 def main(path,out_path,yaw,min_distance,adaptive_distance):
+    min_distance = float(min_distance) #force it to a float
 
     if adaptive_distance != None:
         a,b,c,d = adaptive_distance
